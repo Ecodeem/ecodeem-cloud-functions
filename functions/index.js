@@ -46,29 +46,53 @@ const parseContacts = async (contacts, user_id) => {
     } catch (error) {
         return console.log(error);
     }
+}
 
+const syncContacts = async (contacts, user_id) => {
+    // prepare new contacts function
+    const parsedContacts = await parseContacts(contacts, user_id);
+    if (parsedContacts.length > 0) {
+        // delete all old contacts registered for a user
+        await contactsRef.where("user_id", '==', user_id).get().then((querySnapshot) => {
+            return querySnapshot.forEach(async (doc) => {
+                await doc.ref.delete();
+            });
+        });
+        // create new instances for already prepared contacts
+        await parsedContacts.forEach(async (contact_info) => {
+            await contactsRef.doc().set({
+                user_id: user_id,
+                ...contact_info,
+            }, { merge: true });
+        });
+    }
 }
 
 // route to parse contacts
 app.post('/parseContacts', async (req, res) => {
     try {
         const { contacts, user_id } = req.body;
-        // prepare new contacts function
-        const parsedContacts = await parseContacts(contacts, user_id);
-        if (parsedContacts.length > 0) {
-            // delete all old contacts registered for a user
-            await contactsRef.where("user_id", '==', user_id).get().then((querySnapshot) => {
-                return querySnapshot.forEach(async (doc) => {
-                    await doc.ref.delete();
-                });
-            });
-            // create new instances for already prepared contacts
-            await parsedContacts.forEach(async (contact_info) => {
-                await contactsRef.add({
-                    user_id: user_id,
-                    ...contact_info,
-                });
-            });
+
+        if (contacts.length < 3) {
+            syncContacts(contacts, user_id);
+        } else {
+            const remainingNo = contacts.length % 3;
+            const quotient = (contacts.length - remainingNo) / 3;
+            const promises = [
+                syncContacts([...contacts.slice(0, quotient)], user_id),
+                syncContacts([...contacts.slice(quotient, quotient * 2)], user_id),
+                syncContacts([...contacts.slice(quotient * 2, (quotient * 3) + 1)], user_id),
+            ];
+
+            // if there are reminants
+            if (remainingNo > 0) {
+                remainingElements = [];
+                for (let index = 1; index <= remainingNo; index++) {
+                    remainingElements.push(contacts[i]);
+                }
+                promises.push(syncContacts([...remainingElements], user_id));
+            }
+            await Promise.all([...promises]);
         }
         // final response
         return res.json({
@@ -187,7 +211,10 @@ app.get('/', async (req, res) => {
     });
 })
 
-exports.webApi = functions.https.onRequest(main);
+exports.webApi = functions.runWith({
+    timeoutSeconds: 540,
+    memory: '2GB'
+}).https.onRequest(main);
 
 
 const prepareLastMessage = (message_data) => {
