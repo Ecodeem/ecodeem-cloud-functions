@@ -22,50 +22,88 @@ main.use(bodyParser.json());
 // contacts and db parser function
 const parseContacts = async (contacts, user_id) => {
     try {
+        console.log(`contacts, ${JSON.stringify(contacts)}`);
         const user_info = await usersRef.doc(user_id).get();
         // array holder for final contact values
         const newContacts = [];
+        // array holder for duplicate values checking
+        const duplicateContactsBuffer = [];
         // create query for each contact
         const queries = contacts.map((f) => usersRef.where('generatedPhones', 'array-contains', f.phone).limit(1).get());
         // dispatch all queries concurrently
         const request = await Promise.all(queries);
         // create new contact instance and push to holder variable
         request.map((doc, i) => {
+            // if result is empty
             if (doc.empty) return null;
+            // if its the owner of the account has his own contact
             if (user_info.data().generatedPhones.includes(doc.docs[0].data().phone)) return null;
+            // if it has been generated before using the duplicate buffer
+            if (duplicateContactsBuffer.includes(JSON.stringify({
+                avatar: doc.docs[0].data().avatar || "",
+                display_name: contacts[i].display_name || doc.docs[0].data().username,
+                email: doc.docs[0].data().email || "",
+                ecodeem_id: doc.docs[0].data().ecodeem_id || "",
+                phone: doc.docs[0].data().phone || "",
+                username: doc.docs[0].data().username || "",
+                generatedPhones: doc.docs[0].data().generatedPhones || [],
+            }))) return null;
+            // populate both the buffer and actual array if it passes all tests
+            duplicateContactsBuffer.push(JSON.stringify({
+                avatar: doc.docs[0].data().avatar || "",
+                display_name: contacts[i].display_name || doc.docs[0].data().username,
+                email: doc.docs[0].data().email || "",
+                ecodeem_id: doc.docs[0].data().ecodeem_id || "",
+                phone: doc.docs[0].data().phone || "",
+                username: doc.docs[0].data().username || "",
+                generatedPhones: doc.docs[0].data().generatedPhones || [],
+            }));
             return newContacts.push({
                 avatar: doc.docs[0].data().avatar || "",
                 display_name: contacts[i].display_name || doc.docs[0].data().username,
                 email: doc.docs[0].data().email || "",
                 ecodeem_id: doc.docs[0].data().ecodeem_id || "",
                 phone: doc.docs[0].data().phone || "",
-                username: doc.docs[0].data().username || ""
+                username: doc.docs[0].data().username || "",
+                generatedPhones: doc.docs[0].data().generatedPhones || [],
             });
         });
         return newContacts;
     } catch (error) {
-        return console.log(error);
+        console.log(error);
+        return [];
     }
 }
 
 const syncContacts = async (contacts, user_id) => {
-    // prepare new contacts function
-    const parsedContacts = await parseContacts(contacts, user_id);
-    if (parsedContacts.length > 0) {
-        // delete all old contacts registered for a user
-        await contactsRef.where("user_id", '==', user_id).get().then((querySnapshot) => {
-            return querySnapshot.forEach(async (doc) => {
-                await doc.ref.delete();
+    try {
+        // prepare new contacts function
+        const parsedContacts = await parseContacts(contacts, user_id);
+        if (parsedContacts.length !== undefined && parsedContacts.length > 0) {
+            // delete all contacts registered for a user that do not exist
+            await contactsRef.where("user_id", '==', user_id).get().then((querySnapshot) => {
+                return querySnapshot.forEach(async (doc) => {
+                    const found = contacts.find((element) => {
+                        return element.phone === doc.data().phone || doc.data().generatedPhones.includes(element.phone);
+                    });
+                    if (found === undefined || found === null) {
+                        await doc.ref.delete();
+                    }
+
+                });
             });
-        });
-        // create new instances for already prepared contacts
-        await parsedContacts.forEach(async (contact_info) => {
-            await contactsRef.doc().set({
-                user_id: user_id,
-                ...contact_info,
-            }, { merge: true });
-        });
+            // create new instances for already prepared contacts
+            await parsedContacts.forEach(async (contact_info) => {
+                await contactsRef.doc().set({
+                    user_id: user_id,
+                    ...contact_info,
+                }, { merge: true });
+            });
+        }
+    } catch (error) {
+        console.log(error);
     }
+
 }
 
 // route to parse contacts
@@ -118,7 +156,7 @@ app.post("/signup", async (req, res) => {
             country: country,
             ecodeem_id: ecodeem_id,
             email: email,
-            last_seen: new Date().now(),
+            last_seen: new Date(),
             online: true,
             phone: phone,
             username: username,
@@ -146,7 +184,7 @@ app.put("/update", async (req, res) => {
             avatar: avatar,
             country: country,
             email: email,
-            last_seen: new Date().now(),
+            last_seen: new Date(),
             online: true,
             phone: phone,
             username: username,
@@ -188,7 +226,7 @@ app.get("/users/:user_id/status/:status", async (req, res) => {
         const { user_id, status } = req.params;
         await usersRef.doc(user_id).update({
             online: status === 'online' ? true : false,
-            last_seen: new Date().now()
+            last_seen: new Date()
         });
         return res.json({
             success: true,
@@ -233,22 +271,21 @@ const prepareLastMessage = (message_data) => {
 }
 
 // listener for chat changes to update user conversations
-exports.syncSingleChatWithConversations = functions.firestore.document('message/{message_id}').onCreate((change, context) => {
-    const chat_id = change.data().chat_id;
-    const type = change.data().type;
-    if (type === 'single') {
+exports.syncSingleChatWithConversations = functions.firestore.document('messages/{message_id}').onCreate((change, context) => {
+    try {
+        const chat_id = change.data().chat_id;
         const usersArray = chat_id.split("-");
         usersArray.forEach(async (user, index) => {
-            const otherUser = await usersRef.doc(usersArray[index === 0 ? 1 : 0]).get();
-            await usersRef.doc(user).update({
-                conversations: admin.firestore.FieldValue.arrayUnion({
+            await usersRef.doc(user).set({
+                conversations: [{
                     chat_id: chat_id,
                     user_id: usersArray[index === 0 ? 1 : 0],
-                    date: new Date().now(),
+                    date: new Date(),
                     last_message: prepareLastMessage(change.data()),
-                }),
-            });
+                }],
+            }, { merge: true });
         });
+    } catch (error) {
+        console.log(error);
     }
-
 });
