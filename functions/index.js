@@ -22,7 +22,6 @@ main.use(bodyParser.json());
 // contacts and db parser function
 const parseContacts = async (contacts, user_id) => {
     try {
-        console.log(`contacts, ${JSON.stringify(contacts)}`);
         const user_info = await usersRef.doc(user_id).get();
         // array holder for final contact values
         const newContacts = [];
@@ -79,7 +78,7 @@ const syncContacts = async (contacts, user_id) => {
     try {
         // prepare new contacts function
         const parsedContacts = await parseContacts(contacts, user_id);
-        if (parsedContacts.length !== undefined && parsedContacts.length > 0) {
+        if (parsedContacts.length !== 0) {
             // delete all contacts registered for a user that do not exist
             await contactsRef.where("user_id", '==', user_id).get().then((querySnapshot) => {
                 return querySnapshot.forEach(async (doc) => {
@@ -114,23 +113,26 @@ app.post('/parseContacts', async (req, res) => {
         if (contacts.length < 3) {
             syncContacts(contacts, user_id);
         } else {
-            const remainingNo = contacts.length % 3;
-            const quotient = (contacts.length - remainingNo) / 3;
-            const promises = [
-                syncContacts([...contacts.slice(0, quotient)], user_id),
-                syncContacts([...contacts.slice(quotient, quotient * 2)], user_id),
-                syncContacts([...contacts.slice(quotient * 2, (quotient * 3) + 1)], user_id),
-            ];
-
-            // if there are reminants
-            if (remainingNo > 0) {
-                remainingElements = [];
-                for (let index = 1; index <= remainingNo; index++) {
-                    remainingElements.push(contacts[i]);
-                }
-                promises.push(syncContacts([...remainingElements], user_id));
+            // buffer array for promise methods
+            let promisesArray = [];
+            // clone array
+            let newContacts = [...contacts];
+            // default chunksize set to 15
+            let chunk_size = 15;
+            // buffer array for chunks
+            let tempArray = [];
+            // counter
+            let index = 0;
+            // split into chunks
+            for (index = 0; index < newContacts.length; index += chunk_size) {
+                tempArray.push(newContacts.slice(index, index + chunk_size));
             }
-            await Promise.all([...promises]);
+            // prepare promise methods
+            tempArray.forEach(arr => {
+                promisesArray.push(syncContacts(arr, user_id));
+            });
+            // send a request for batch
+            await Promise.all([...promisesArray]);
         }
         // final response
         return res.json({
@@ -178,17 +180,8 @@ app.post("/signup", async (req, res) => {
 // route to update user details
 app.put("/update", async (req, res) => {
     try {
-        const { country, ecodeem_id, email, phone, username, avatar } = req.body;
-        await usersRef.doc(ecodeem_id).update({
-            ecodeem_id: ecodeem_id,
-            avatar: avatar,
-            country: country,
-            email: email,
-            last_seen: new Date(),
-            online: true,
-            phone: phone,
-            username: username,
-        });
+        const { ecodeem_id } = req.body;
+        await usersRef.doc(ecodeem_id).set({ ...req.body }, { merge: true });
         return res.json({
             success: true,
             message: "user updated"
@@ -270,11 +263,27 @@ const prepareLastMessage = (message_data) => {
     }
 }
 
-// listener for chat changes to update user conversations
+const notifyRecipient = async (message_data, receiver, sender) => {
+    const payload = {
+        notification: {
+            title: sender.username,
+            body: prepareLastMessage(message_data),
+        },
+        data: {
+            chat: message_data.chat_id,
+            click_action: "FLUTTER_NOTIFICATION_CLICK"
+        }
+    };
+    await admin.messaging().sendToDevice(receiver.uid, payload, { priority: "high" });
+}
+
+// listener for chat changes to update user conversations and send notifications
 exports.syncSingleChatWithConversations = functions.firestore.document('messages/{message_id}').onCreate((change, context) => {
     try {
         const chat_id = change.data().chat_id;
         const usersArray = chat_id.split("-");
+        // get receipient index
+        const recepientIndex = usersArray.findIndex(e => e !== change.data().from);
         usersArray.forEach(async (user, index) => {
             await usersRef.doc(user).set({
                 conversations: [{
@@ -284,7 +293,12 @@ exports.syncSingleChatWithConversations = functions.firestore.document('messages
                     last_message: prepareLastMessage(change.data()),
                 }],
             }, { merge: true });
+            if (index === recepientIndex) {
+                const usersData = await Promise.all([usersRef.doc(user).get(), usersRef.doc(usersArray[index === 0 ? 1 : 0]).get(),])
+                await notifyRecipient(change.data(), usersData[0].data(), usersData[1].data());
+            }
         });
+        return;
     } catch (error) {
         console.log(error);
     }
