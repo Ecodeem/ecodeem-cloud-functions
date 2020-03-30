@@ -1,6 +1,8 @@
+/* eslint-disable consistent-return */
+/* eslint-disable eqeqeq */
+/* eslint-disable no-eq-null */
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
-const mongodb = require('mongodb');
 const express = require('express');
 const bodyParser = require("body-parser");
 const cors = require('cors');
@@ -10,6 +12,7 @@ const usersRef = db.collection('users');
 const contactsRef = db.collection('contacts');
 const messageRef = db.collection('messages');
 const chatsRef = db.collection('chats');
+const groupsRef = db.collection('groups');
 
 
 const app = express();
@@ -69,7 +72,7 @@ const parseContacts = async (contacts, user_id) => {
         });
         return newContacts;
     } catch (error) {
-        console.log(error);
+        console.error(error);
         return [];
     }
 }
@@ -85,14 +88,13 @@ const syncContacts = async (contacts, user_id) => {
                     const found = contacts.find((element) => {
                         return element.phone === doc.data().phone || doc.data().generatedPhones.includes(element.phone);
                     });
-                    if (found === undefined || found === null) {
+                    if (found == null) {
                         await doc.ref.delete();
                     }
-
                 });
             });
             // create new instances for already prepared contacts
-            await parsedContacts.forEach(async (contact_info) => {
+            parsedContacts.forEach(async (contact_info) => {
                 await contactsRef.doc().set({
                     user_id: user_id,
                     ...contact_info,
@@ -100,7 +102,7 @@ const syncContacts = async (contacts, user_id) => {
             });
         }
     } catch (error) {
-        console.log(error);
+        console.error(error);
     }
 
 }
@@ -140,7 +142,7 @@ app.post('/parseContacts', async (req, res) => {
             message: "processing initiated"
         });
     } catch (error) {
-        console.log(error);
+        console.error(error);
         return res.json({
             success: false,
             error: error
@@ -169,7 +171,7 @@ app.post("/signup", async (req, res) => {
             message: "user created"
         });
     } catch (error) {
-        console.log(error);
+        console.error(error);
         return res.json({
             success: false,
             error: error
@@ -181,13 +183,13 @@ app.post("/signup", async (req, res) => {
 app.put("/update", async (req, res) => {
     try {
         const { ecodeem_id } = req.body;
-        await usersRef.doc(ecodeem_id).set({ ...req.body }, { merge: true });
+        await usersRef.doc(ecodeem_id).update({ ...req.body });
         return res.json({
             success: true,
             message: "user updated"
         });
     } catch (error) {
-        console.log(error);
+        console.error(error);
         return res.json({
             success: false,
             error: error
@@ -200,18 +202,58 @@ app.delete("/delete/:ecodeem_id", async (req, res) => {
     try {
         const { ecodeem_id } = req.params;
         await usersRef.doc(ecodeem_id).delete();
+        const querySnapshot = await contactsRef.where("user_id", '==', ecodeem_id).get();
+        querySnapshot.forEach(async (doc) => {
+            await doc.ref.delete();
+        });
         return res.json({
             success: true,
             message: "user deleted"
         });
     } catch (error) {
-        console.log(error);
+        console.error(error);
         return res.json({
             success: false,
             error: error
         })
     }
 });
+
+// route to block and unblock user
+app.put("/users/:user_id/block/:ecodeem_id", async (req, res) => {
+    try {
+        const { user_id, ecodeem_id } = req.params;
+        const user = await usersRef.doc(user_id).get();
+        const buffer = user.data().conversations.map((conversation) => {
+            if (conversation.user_id === ecodeem_id) {
+                return {
+                    chat_id: conversation.chat_id,
+                    date: conversation.date,
+                    last_message: conversation.last_message,
+                    user_id: conversation.user_id,
+                    blocked: true
+                }
+            } else {
+                return {
+                    ...conversation
+                }
+            }
+        });
+        await usersRef.doc(user_id).update({
+            conversations: buffer
+        });
+        return res.json({
+            success: true,
+            message: 'user blocked'
+        });
+    } catch (error) {
+        console.error(error);
+        return res.json({
+            success: false,
+            error: error
+        });
+    }
+})
 
 //route to switch status
 app.get("/users/:user_id/status/:status", async (req, res) => {
@@ -226,7 +268,7 @@ app.get("/users/:user_id/status/:status", async (req, res) => {
             message: 'user status changed'
         });
     } catch (error) {
-        console.log(error);
+        console.error(error);
         return res.json({
             success: false,
             error: error
@@ -264,42 +306,188 @@ const prepareLastMessage = (message_data) => {
 }
 
 const notifyRecipient = async (message_data, receiver, sender) => {
-    const payload = {
-        notification: {
-            title: sender.username,
-            body: prepareLastMessage(message_data),
-        },
-        data: {
-            chat: message_data.chat_id,
-            click_action: "FLUTTER_NOTIFICATION_CLICK"
+    try {
+        const payload = {
+            notification: {
+                title: sender.username,
+                body: prepareLastMessage(message_data),
+            },
+            data: {
+                chat: message_data.chat_id,
+                click_action: "FLUTTER_NOTIFICATION_CLICK"
+            }
+        };
+        await admin.messaging().sendToDevice(receiver.uid, payload, { priority: "high" });
+    } catch (e) {
+        // eslint-disable-next-line no-throw-literal
+        console.error(`error sending notification: ${e}`);
+    }
+
+}
+
+const prepareUnreadCount = (chat_id, recepientData) => {
+    try {
+        const conversations = [...recepientData.conversations];
+        const currentConversation = conversations.filter(conversation => conversation.chat_id === chat_id);
+        if (currentConversation != null && currentConversation[0] != null && currentConversation[0].unread_count != null) {
+            return currentConversation[0].unread_count + 1;
         }
-    };
-    await admin.messaging().sendToDevice(receiver.uid, payload, { priority: "high" });
+        return 1;
+    }
+    catch (error) {
+        console.error(error);
+        return 1;
+    }
 }
 
 // listener for chat changes to update user conversations and send notifications
-exports.syncSingleChatWithConversations = functions.firestore.document('messages/{message_id}').onCreate((change, context) => {
+exports.syncSingleChatWithConversations = functions.firestore.document('messages/{message_id}').onCreate(async (change, context) => {
     try {
+        let senderId;
+        let recepientId;
+        let senderIndex;
         const chat_id = change.data().chat_id;
         const usersArray = chat_id.split("-");
-        // get receipient index
+        // get Ids of sender and recepient
         const recepientIndex = usersArray.findIndex(e => e !== change.data().from);
+        if (recepientIndex === 0) {
+            [recepientId, senderId] = usersArray;
+            senderIndex = 1;
+        } else {
+            [senderId, recepientId] = usersArray;
+            senderIndex = 0;
+        }
+        const [senderData, recepientData] = await Promise.all([usersRef.doc(senderId).get(), usersRef.doc(recepientId).get()]);
         usersArray.forEach(async (user, index) => {
-            await usersRef.doc(user).set({
-                conversations: [{
-                    chat_id: chat_id,
-                    user_id: usersArray[index === 0 ? 1 : 0],
-                    date: new Date(),
-                    last_message: prepareLastMessage(change.data()),
-                }],
-            }, { merge: true });
-            if (index === recepientIndex) {
-                const usersData = await Promise.all([usersRef.doc(user).get(), usersRef.doc(usersArray[index === 0 ? 1 : 0]).get(),])
-                await notifyRecipient(change.data(), usersData[0].data(), usersData[1].data());
+            const userDoc = usersRef.doc(user);
+            if (index === senderIndex) {
+                // for sender
+                let allConversations = [...senderData.data().conversations];
+                let currentConversationIndex = allConversations.findIndex(conv => conv.chat_id === chat_id);
+                if (currentConversationIndex !== -1) {
+                    allConversations[currentConversationIndex] = {
+                        chat_id: chat_id,
+                        user_id: recepientId,
+                        date: new Date(),
+                        last_message: prepareLastMessage(change.data()),
+                        unread_count: 0,
+                    };
+                } else {
+                    allConversations.push({
+                        chat_id: chat_id,
+                        user_id: recepientId,
+                        date: new Date(),
+                        last_message: prepareLastMessage(change.data()),
+                        unread_count: 0,
+                    });
+                }
+
+                await userDoc.set({
+                    conversations: allConversations,
+                }, { merge: true });
+            } else {
+                // for receiver
+                let allConversations = [...recepientData.data().conversations];
+                let currentConversationIndex = allConversations.findIndex(conv => conv.chat_id === chat_id);
+                if (currentConversationIndex !== -1) {
+                    allConversations[currentConversationIndex] = {
+                        chat_id: chat_id,
+                        user_id: senderId,
+                        date: new Date(),
+                        last_message: prepareLastMessage(change.data()),
+                        unread_count: prepareUnreadCount(chat_id, recepientData.data()),
+                    };
+                } else {
+                    allConversations.push({
+                        chat_id: chat_id,
+                        user_id: senderId,
+                        date: new Date(),
+                        last_message: prepareLastMessage(change.data()),
+                        unread_count: prepareUnreadCount(chat_id, recepientData.data()),
+                    });
+                }
+
+                await userDoc.set({
+                    conversations: allConversations,
+                }, { merge: true });
+                // notify receiver via push notifications
+                await notifyRecipient(change.data(), recepientData.data(), senderData.data());
             }
         });
-        return;
+        return 'done';
     } catch (error) {
-        console.log(error);
+        console.error(error);
     }
+});
+
+// listener for creation of new groups to send notifications to members
+exports.handleNewGroupCreation = functions.firestore.document('groups/{group_id}').onCreate(async (change, context) => {
+    try {
+        const { subject, members, id, created_by } = change.data();
+
+        const creatorData = await usersRef.doc(created_by).get();
+        const creatorDoc = creatorData.data();
+
+        members.forEach(async (memberID) => {
+            const memberData = await usersRef.doc(memberID).get();
+            const memberDoc = memberData.data();
+            const payload = {
+                notification: {
+                    title: "Ecodeem Groups",
+                    body: `You have been added to Group: ${subject} created by ${creatorDoc.username}`,
+                },
+                data: {
+                    group: id,
+                    click_action: "FLUTTER_NOTIFICATION_CLICK"
+                }
+            };
+            if (memberDoc.ecodeem_id !== creatorDoc.ecodeem_id) {
+                await admin.messaging().sendToDevice(memberDoc.uid, payload, { priority: "high" });
+            }  
+        });
+        return  'done';
+    } catch (error) {
+        console.error(error);
+    }
+});
+
+// listener for group chat messages to notify members
+exports.handleNewGroupChatMessages = functions.firestore.document('group_messages/{group_message_id}').onCreate(async (change, context) => {
+    try {
+        const {group_id, from} = change.data();
+
+        const groupData = await groupsRef.doc(group_id).get();
+        const groupDoc = groupData.data();
+    
+        const fromData = await usersRef.doc(from).get();
+        const fromDoc = fromData.data();
+    
+        const message_data = prepareLastMessage(change.data());
+        const message = `${fromDoc.username}: ${message_data}`;
+    
+        groupDoc.members.forEach( async (member) => {
+            const userData = await usersRef.doc(member).get();
+            const userDoc = userData.data();
+    
+            if(userDoc.muted_groups != null) {
+                if (!(userDoc.muted_groups.includes(group_id))) {
+                    const payload = {
+                        notification: {
+                            title: groupDoc.subject,
+                            body: `${fromDoc.username}: ${message}`,
+                        },
+                        data: {
+                            group: id,
+                            click_action: "FLUTTER_NOTIFICATION_CLICK"
+                        }
+                    }; 
+    
+                    await admin.messaging().sendToDevice(userDoc.uid, payload, { priority: "high" });
+                }
+            }
+        });
+    } catch (error) {
+        console.error(error);
+    }
+
 });
