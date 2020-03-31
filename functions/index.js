@@ -25,6 +25,9 @@ main.use(bodyParser.json());
 // contacts and db parser function
 const parseContacts = async (contacts, user_id) => {
     try {
+
+        console.log("parse contacts initiated");
+
         const user_info = await usersRef.doc(user_id).get();
         // array holder for final contact values
         const newContacts = [];
@@ -70,15 +73,18 @@ const parseContacts = async (contacts, user_id) => {
                 generatedPhones: doc.docs[0].data().generatedPhones || [],
             });
         });
+        console.log("parse contacts complete");
         return newContacts;
     } catch (error) {
-        console.error(error);
+        console.error(`parse contacts encountered an error: ${JSON.stringify(error)}`);
         return [];
     }
 }
 
+// synchronize parsed contacts with cloud firestore
 const syncContacts = async (contacts, user_id) => {
     try {
+        console.log("contacts sync initiated")
         // prepare new contacts function
         const parsedContacts = await parseContacts(contacts, user_id);
         if (parsedContacts.length !== 0) {
@@ -101,8 +107,10 @@ const syncContacts = async (contacts, user_id) => {
                 }, { merge: true });
             });
         }
+
+        console.log("contacts sync complete");
     } catch (error) {
-        console.error(error);
+        console.error(`contacts sync encountered an error: ${JSON.stringify(error)}`);
     }
 
 }
@@ -110,6 +118,8 @@ const syncContacts = async (contacts, user_id) => {
 // route to parse contacts
 app.post('/parseContacts', async (req, res) => {
     try {
+        console.log("parse contacts processor initiated");
+
         const { contacts, user_id } = req.body;
 
         if (contacts.length < 3) {
@@ -135,6 +145,8 @@ app.post('/parseContacts', async (req, res) => {
             });
             // send a request for batch
             await Promise.all([...promisesArray]);
+
+            console.log("parse contacts processor complete");
         }
         // final response
         return res.json({
@@ -142,7 +154,7 @@ app.post('/parseContacts', async (req, res) => {
             message: "processing initiated"
         });
     } catch (error) {
-        console.error(error);
+        console.error(`parse contacts processor encountered an error: ${JSON.stringify(error)}`);
         return res.json({
             success: false,
             error: error
@@ -153,6 +165,7 @@ app.post('/parseContacts', async (req, res) => {
 // route to signup new user
 app.post("/signup", async (req, res) => {
     try {
+        console.log("signup initiated");
         const { country, ecodeem_id, email, phone, username, avatar, generatedPhones } = req.body;
         await usersRef.doc(ecodeem_id).set({
             conversations: [],
@@ -166,12 +179,13 @@ app.post("/signup", async (req, res) => {
             username: username,
             generatedPhones: generatedPhones
         });
+        console.log("signup complete");
         return res.json({
             success: true,
             message: "user created"
         });
     } catch (error) {
-        console.error(error);
+        console.error(`signup has encountered an error: ${JSON.stringify(error)}`);
         return res.json({
             success: false,
             error: error
@@ -182,14 +196,16 @@ app.post("/signup", async (req, res) => {
 // route to update user details
 app.put("/update", async (req, res) => {
     try {
+        console.log("update user initiated")
         const { ecodeem_id } = req.body;
         await usersRef.doc(ecodeem_id).update({ ...req.body });
+        console.log("update user complete");
         return res.json({
             success: true,
             message: "user updated"
         });
     } catch (error) {
-        console.error(error);
+        console.error(`update user encountered an error: ${JSON.stringify(error)}`);
         return res.json({
             success: false,
             error: error
@@ -200,18 +216,20 @@ app.put("/update", async (req, res) => {
 // route to delete existing user
 app.delete("/delete/:ecodeem_id", async (req, res) => {
     try {
+        console.log("delete user initiated");
         const { ecodeem_id } = req.params;
         await usersRef.doc(ecodeem_id).delete();
         const querySnapshot = await contactsRef.where("user_id", '==', ecodeem_id).get();
         querySnapshot.forEach(async (doc) => {
             await doc.ref.delete();
         });
+        console.log("delete user complete");
         return res.json({
             success: true,
             message: "user deleted"
         });
     } catch (error) {
-        console.error(error);
+        console.error(`delete user encountered an error: ${JSON.stringify(error)}`);
         return res.json({
             success: false,
             error: error
@@ -222,6 +240,7 @@ app.delete("/delete/:ecodeem_id", async (req, res) => {
 // route to block and unblock user
 app.put("/users/:user_id/block/:ecodeem_id", async (req, res) => {
     try {
+        console.log("block and unblock initiated");
         const { user_id, ecodeem_id } = req.params;
         const user = await usersRef.doc(user_id).get();
         const buffer = user.data().conversations.map((conversation) => {
@@ -242,12 +261,13 @@ app.put("/users/:user_id/block/:ecodeem_id", async (req, res) => {
         await usersRef.doc(user_id).update({
             conversations: buffer
         });
+        console.log("block and unblock complete");
         return res.json({
             success: true,
             message: 'user blocked'
         });
     } catch (error) {
-        console.error(error);
+        console.error(`block and unblock encountered an error: ${JSON.stringify(error)}`);
         return res.json({
             success: false,
             error: error
@@ -258,17 +278,19 @@ app.put("/users/:user_id/block/:ecodeem_id", async (req, res) => {
 //route to switch status
 app.get("/users/:user_id/status/:status", async (req, res) => {
     try {
+        console.log("swich user online status initiated");
         const { user_id, status } = req.params;
         await usersRef.doc(user_id).update({
             online: status === 'online' ? true : false,
             last_seen: new Date()
         });
+        console.log("switch user online status complete");
         return res.json({
             success: true,
             message: 'user status changed'
         });
     } catch (error) {
-        console.error(error);
+        console.error(`switch user online status encountered an error: ${JSON.stringify(error)}`);
         return res.json({
             success: false,
             error: error
@@ -289,8 +311,11 @@ exports.webApi = functions.runWith({
     memory: '2GB'
 }).https.onRequest(main);
 
-
+// prepare the string to be applied as last message for all message types
 const prepareLastMessage = (message_data) => {
+
+    console.log("last message prepared");
+
     switch (message_data.type) {
         case "text":
             return message_data.text;
@@ -305,6 +330,7 @@ const prepareLastMessage = (message_data) => {
     }
 }
 
+// notify recipient using FCM
 const notifyRecipient = async (message_data, receiver, sender) => {
     try {
         const payload = {
@@ -317,25 +343,28 @@ const notifyRecipient = async (message_data, receiver, sender) => {
                 click_action: "FLUTTER_NOTIFICATION_CLICK"
             }
         };
-        await admin.messaging().sendToDevice(receiver.uid, payload, { priority: "high" });
+        const response = await admin.messaging().sendToDevice(receiver.uid, payload, { priority: "high" });
+        console.log(`notification submitted: ${JSON.stringify(response.results)}`)
     } catch (e) {
         // eslint-disable-next-line no-throw-literal
-        console.error(`error sending notification: ${e}`);
+        console.error(`error sending notification: ${JSON.stringify(e)}`);
     }
 
 }
 
+// Compute the total unread message count for recipient
 const prepareUnreadCount = (chat_id, recepientData) => {
     try {
         const conversations = [...recepientData.conversations];
         const currentConversation = conversations.filter(conversation => conversation.chat_id === chat_id);
+        console.log("unread count complete");
         if (currentConversation != null && currentConversation[0] != null && currentConversation[0].unread_count != null) {
             return currentConversation[0].unread_count + 1;
         }
         return 1;
     }
     catch (error) {
-        console.error(error);
+        console.error(`unread count encountered an error: ${JSON.stringify(error)}`);
         return 1;
     }
 }
@@ -343,6 +372,7 @@ const prepareUnreadCount = (chat_id, recepientData) => {
 // listener for chat changes to update user conversations and send notifications
 exports.syncSingleChatWithConversations = functions.firestore.document('messages/{message_id}').onCreate(async (change, context) => {
     try {
+        console.log("listener for chat message initiated");
         let senderId;
         let recepientId;
         let senderIndex;
@@ -414,15 +444,16 @@ exports.syncSingleChatWithConversations = functions.firestore.document('messages
                 await notifyRecipient(change.data(), recepientData.data(), senderData.data());
             }
         });
-        return 'done';
+        console.log('listener for chat message complete ');
     } catch (error) {
-        console.error(error);
+        console.error(`chat message listener encountered an error: ${JSON.stringify(error)}`);
     }
 });
 
 // listener for creation of new groups to send notifications to members
 exports.handleNewGroupCreation = functions.firestore.document('groups/{group_id}').onCreate(async (change, context) => {
     try {
+        console.log("new group listener initiated");
         const { subject, members, id, created_by } = change.data();
 
         const creatorData = await usersRef.doc(created_by).get();
@@ -442,18 +473,21 @@ exports.handleNewGroupCreation = functions.firestore.document('groups/{group_id}
                 }
             };
             if (memberDoc.ecodeem_id !== creatorDoc.ecodeem_id) {
-                await admin.messaging().sendToDevice(memberDoc.uid, payload, { priority: "high" });
+               const response = await admin.messaging().sendToDevice(memberDoc.uid, payload, { priority: "high" });
+               console.log(`notification submitted: ${JSON.stringify(response.results)}`)
             }  
         });
-        return  'done';
+        console.log("new group listener complete");
     } catch (error) {
-        console.error(error);
+        console.error(`new group listener encountered an error: ${JSON.stringify(error)}`);
     }
 });
 
 // listener for group chat messages to notify members
 exports.handleNewGroupChatMessages = functions.firestore.document('group_messages/{group_message_id}').onCreate(async (change, context) => {
     try {
+        console.log("listener for group messages initiated");
+
         const {group_id, from} = change.data();
 
         const groupData = await groupsRef.doc(group_id).get();
@@ -464,12 +498,17 @@ exports.handleNewGroupChatMessages = functions.firestore.document('group_message
     
         const message_data = prepareLastMessage(change.data());
         const message = `${fromDoc.username}: ${message_data}`;
+
+        await groupsRef.doc(group_id).update({
+            last_message: message,
+            date: new Date(),
+        });
     
         groupDoc.members.forEach( async (member) => {
             const userData = await usersRef.doc(member).get();
             const userDoc = userData.data();
     
-            if(userDoc.muted_groups != null) {
+            if (userDoc.muted_groups != null) {
                 if (!(userDoc.muted_groups.includes(group_id))) {
                     const payload = {
                         notification: {
@@ -482,12 +521,14 @@ exports.handleNewGroupChatMessages = functions.firestore.document('group_message
                         }
                     }; 
     
-                    await admin.messaging().sendToDevice(userDoc.uid, payload, { priority: "high" });
+                    const response = await admin.messaging().sendToDevice(userDoc.uid, payload, { priority: "high" });
+                    console.log(`notification submitted: ${JSON.stringify(response.results)}`)
                 }
             }
         });
-    } catch (error) {
-        console.error(error);
-    }
 
+        console.log("listener for group messages complete");
+    } catch (error) {
+        console.error(`group message listener encountered an error: ${JSON.stringify(error)}`);
+    }
 });
